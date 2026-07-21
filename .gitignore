@@ -1,0 +1,44 @@
+# Environment & secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs & data
+logs/
+*.log
+*.db
+*.sqlite3
+
+# ML models
+models/*.pkl
+models/*.joblib
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Gemini
+.gemini/
