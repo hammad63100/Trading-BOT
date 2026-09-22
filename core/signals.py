@@ -121,12 +121,12 @@ def _strategy_trend_momentum(last, prev) -> tuple[str, float, dict]:
     long_count  = sum(long_votes.values())
     short_count = sum(short_votes.values())
 
-    if long_count >= 4 and long_count > short_count:
+    if trend_up and long_count >= 4 and long_count > short_count:
         conf = long_count / 5.0
         result["votes"] = long_votes
         return "LONG", conf, result
 
-    if short_count >= 4 and short_count > long_count:
+    if trend_down and short_count >= 4 and short_count > long_count:
         conf = short_count / 5.0
         result["votes"] = short_votes
         return "SHORT", conf, result
@@ -334,7 +334,7 @@ def _strategy_structure_ichimoku(last, prev) -> tuple[str, float, dict]:
         result["votes"] = long_votes
         return "LONG", 0.75, result
 
-    if short_count >= 3 and short_count > short_count:
+    if short_count >= 3 and short_count > long_count:
         result["votes"] = short_votes
         return "SHORT", 0.75, result
 
@@ -426,8 +426,10 @@ def generate_signal(df: pd.DataFrame, ml_model=None) -> Signal:
     if len(df) < 25:
         return Signal("FLAT", 0.0, "Insufficient data", strategy="none")
 
-    last = {c: _safe(df, c, -1) for c in df.columns}
-    prev = {c: _safe(df, c, -2) for c in df.columns}
+    last_series = df.iloc[-1]
+    prev_series = df.iloc[-2]
+    last = {k: (None if pd.isna(v) else v) for k, v in last_series.items()}
+    prev = {k: (None if pd.isna(v) else v) for k, v in prev_series.items()}
 
     required = ["close", "ema50", "ema200", "rsi14", "macd_hist", "atr14"]
     for col in required:
@@ -475,20 +477,17 @@ def generate_signal(df: pd.DataFrame, ml_model=None) -> Signal:
     direction, base_conf, meta = max(active, key=lambda x: x[1])
 
     # -------------------------------------------------------------------
-    # Filter 2: MTF Check Integration
+    # Macro Trend Filter: Reject counter-trend signals against EMA200
     # -------------------------------------------------------------------
-    try:
-        from core.mtf_filter import check_mtf_alignment
-        mtf_ok, mtf_reason = check_mtf_alignment(SYMBOL, direction)
-        if not mtf_ok:
-            return Signal(
-                direction="FLAT",
-                confidence=round(base_conf, 4),
-                reason=mtf_reason,
-                strategy=meta.get("strategy", "unknown")
-            )
-    except Exception as e:
-        log.warning("MTF check failed in signal generator: %s", e)
+    close_val = last.get("close")
+    ema200_val = last.get("ema200")
+    if close_val is not None and ema200_val is not None:
+        if direction == "LONG" and close_val < ema200_val:
+            return Signal("FLAT", base_conf, "Macro trend BEARISH (close < EMA200) — LONG rejected", strategy=meta.get("strategy", "unknown"))
+        if direction == "SHORT" and close_val > ema200_val:
+            return Signal("FLAT", base_conf, "Macro trend BULLISH (close > EMA200) — SHORT rejected", strategy=meta.get("strategy", "unknown"))
+
+    # Live MTF checks belong in execution, never in historical signal generation.
 
     # -------------------------------------------------------------------
     # Optional ML layer (blends 40% ML, 60% rule)
@@ -498,7 +497,8 @@ def generate_signal(df: pd.DataFrame, ml_model=None) -> Signal:
             from ml.features import extract_feature_vector
             features = extract_feature_vector(df)
             ml_prob_up = ml_model.predict_proba([features])[0][1]
-            blended = 0.6 * base_conf + 0.4 * ml_prob_up
+            ml_direction_prob = ml_prob_up if direction == "LONG" else 1.0 - ml_prob_up
+            blended = 0.6 * base_conf + 0.4 * ml_direction_prob
             log.debug("ML blend | rule=%.3f, ml=%.3f, blended=%.3f", base_conf, ml_prob_up, blended)
             base_conf = blended
         except Exception as e:

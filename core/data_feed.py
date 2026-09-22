@@ -45,7 +45,7 @@ def fetch_ohlcv(symbol: str, timeframe: str, n_bars: int = 500) -> pd.DataFrame:
     # Attempt to fetch with automatic reconnect on failure
     rates = None
     for attempt in range(1, MAX_RETRIES + 1):
-        rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, n_bars)
+        rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 1, n_bars)
 
         if rates is not None and len(rates) > 0:
             break
@@ -78,7 +78,9 @@ def fetch_ohlcv(symbol: str, timeframe: str, n_bars: int = 500) -> pd.DataFrame:
     # --- Staleness check ---
     from config.settings import BYPASS_STALENESS_CHECK
     latest_bar_age = pd.Timestamp.utcnow().tz_localize(None) - df["time"].iloc[-1]
-    if latest_bar_age > pd.Timedelta(minutes=5) and not BYPASS_STALENESS_CHECK:
+    minutes = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60,
+               "H4": 240, "D1": 1440, "W1": 10080, "MN1": 44640}[timeframe]
+    if latest_bar_age > pd.Timedelta(minutes=2 * minutes + 5) and not BYPASS_STALENESS_CHECK:
         log.warning(
             "Stale feed detected: latest bar for %s is %s old",
             symbol, latest_bar_age

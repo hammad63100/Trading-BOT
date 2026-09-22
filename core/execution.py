@@ -9,6 +9,8 @@ Ref: Blueprint Section 7 (v2.0)
 
 import logging
 import re
+import math
+import time
 from typing import Optional
 
 import pandas as pd
@@ -41,12 +43,21 @@ def place_order(
     import MetaTrader5 as mt5
     from config.settings import (
         SYMBOL, ATR_SL_MULTIPLIER, ATR_TP_MULTIPLIER,
-        MAX_RISK_PER_TRADE, MAGIC_NUMBER
+        MAX_RISK_PER_TRADE, MAGIC_NUMBER, TRADING_MODE, MIN_SIGNAL_CONFIDENCE
     )
 
+    if signal.direction not in ("LONG", "SHORT") or not math.isfinite(signal.confidence) or signal.confidence < MIN_SIGNAL_CONFIDENCE or df.empty:
+        return None
+    account = mt5.account_info()
+    if account is None or TRADING_MODE not in ("demo", "live"):
+        return None
+    if TRADING_MODE == "demo" and account.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
+        log.error("Demo mode cannot send orders to a real account")
+        return None
+    account_equity = account.equity
     # --- Price & ATR ---
     tick = mt5.symbol_info_tick(SYMBOL)
-    if tick is None:
+    if tick is None or not all(math.isfinite(v) and v > 0 for v in (tick.bid, tick.ask)) or tick.ask < tick.bid or not -5 <= time.time() - tick.time <= 60:
         log.error("Failed to get tick data for %s", SYMBOL)
         log_trade_event("order_failed", reason="no_tick_data")
         return None
@@ -68,7 +79,7 @@ def place_order(
         log.info("Order blocked by Risk Manager: %s", block_reason)
         return None
 
-    if pd.isna(atr) or atr <= 0:
+    if not math.isfinite(atr) or atr <= 0:
         log.error("ATR is invalid (%.4f) — cannot calculate SL/TP", atr)
         log_trade_event("order_failed", reason="invalid_atr", atr=atr)
         return None
@@ -86,25 +97,44 @@ def place_order(
 
     # --- Position Sizing (Anti-Martingale enabled) ---
     symbol_info = mt5.symbol_info(SYMBOL)
-    pip_value = 10.0  # Default for gold
-    if symbol_info:
-        pip_value = symbol_info.trade_tick_value / symbol_info.trade_tick_size \
-            if symbol_info.trade_tick_size > 0 else 10.0
-
-    lots = position_size(account_equity, MAX_RISK_PER_TRADE, sl_distance, pip_value)
+    if symbol_info is None or symbol_info.trade_tick_size <= 0:
+        return None
+    step = symbol_info.trade_tick_size
+    sl = round(round(sl / step) * step, symbol_info.digits)
+    tp = round(round(tp / step) * step, symbol_info.digits)
+    min_stop = symbol_info.trade_stops_level * symbol_info.point
+    if signal.direction == "LONG":
+        valid_stops = 0 < sl < tick.bid and tp > tick.ask and tick.bid - sl >= min_stop and tp - tick.bid >= min_stop
+    else:
+        valid_stops = sl > tick.ask and 0 < tp < tick.bid and sl - tick.ask >= min_stop and tick.ask - tp >= min_stop
+    if not valid_stops:
+        log.info("Order blocked: stops do not satisfy broker limits")
+        return None
+    order_type = mt5.ORDER_TYPE_BUY if signal.direction == "LONG" else mt5.ORDER_TYPE_SELL
+    # Calculate in account currency using the actual contract and normalized stop.
+    reference_volume = symbol_info.volume_min
+    loss = mt5.order_calc_profit(order_type, SYMBOL, reference_volume, price, sl)
+    if loss is None or not math.isfinite(loss) or loss >= 0 or reference_volume <= 0:
+        return None
+    sl_distance = abs(price - sl)
+    value_per_price = -loss / reference_volume / sl_distance
+    lots = position_size(account_equity, MAX_RISK_PER_TRADE, sl_distance, value_per_price,
+                         symbol_info.volume_min, symbol_info.volume_max, symbol_info.volume_step)
 
     if lots <= 0:
-        log.error("Calculated lot size is 0 — cannot place order")
-        log_trade_event("order_failed", reason="zero_lot_size")
+        from core.affordability import affordability
+        details = affordability(account_equity, MAX_RISK_PER_TRADE,
+                                symbol_info.volume_min, -loss / reference_volume)
+        log.warning("Entry skipped: budget %.4f account-currency units; minimum-volume stop loss %.4f; "
+                    "equity needed at configured risk %.2f (before fees/slippage).",
+                    details["budget"], details["minimum_loss"], details["minimum_equity"])
+        log_trade_event("order_blocked", reason="minimum_volume_exceeds_risk_or_loss_scaling", **details)
         return None
 
-    # Enforce broker min/max lot size & step
-    if symbol_info:
-        lots = max(lots, symbol_info.volume_min)
-        lots = min(lots, symbol_info.volume_max)
-        if symbol_info.volume_step > 0:
-            lots = round(lots / symbol_info.volume_step) * symbol_info.volume_step
-            lots = round(lots, 2)
+    margin = mt5.order_calc_margin(order_type, SYMBOL, lots, price)
+    if margin is None or not math.isfinite(margin) or margin < 0 or margin > account.margin_free:
+        log.info("Order blocked: insufficient or unknown margin")
+        return None
 
     # --- Detect broker's allowed filling mode ---
     filling_mode = mt5.ORDER_FILLING_FOK  # default
@@ -128,8 +158,8 @@ def place_order(
         "volume":       float(lots),
         "type":         order_type,
         "price":        float(price),
-        "sl":           float(round(sl, 2)),
-        "tp":           float(round(tp, 2)),
+        "sl":           float(sl),
+        "tp":           float(tp),
         "deviation":    20,
         "magic":        int(MAGIC_NUMBER),
         "comment":      comment,
@@ -143,6 +173,10 @@ def place_order(
         signal.direction, lots, price, sl, sl_distance, tp, tp_distance, atr
     )
 
+    check = mt5.order_check(request)
+    if check is None or check.retcode != 0:
+        log.warning("Broker preflight rejected order")
+        return None
     result = mt5.order_send(request)
 
     if result is None:
@@ -181,8 +215,8 @@ def place_order(
         direction=signal.direction,
         lots=lots,
         price=filled_price,
-        sl=round(sl, 2),
-        tp=round(tp, 2),
+        sl=sl,
+        tp=tp,
         atr=round(atr, 2),
         confidence=signal.confidence,
         reason=signal.reason
@@ -194,8 +228,8 @@ def place_order(
         direction=signal.direction,
         open_price=filled_price,
         volume=lots,
-        sl=round(sl, 2),
-        tp=round(tp, 2),
+        sl=sl,
+        tp=tp,
         signal_confidence=signal.confidence,
         signal_reason=signal.reason,
         magic_number=MAGIC_NUMBER

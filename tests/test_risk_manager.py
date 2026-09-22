@@ -23,10 +23,10 @@ class TestPositionSize:
         assert lots == 0.1
 
     def test_minimum_lot_size(self):
-        # Very small account should still return min lot
+        # Unaffordable minimum must be rejected
         lots = position_size(100, 0.005, 10.0, 10.0)
-        # Risk amount = $0.50, lots = 0.50 / (10 * 10) = 0.005 → min 0.01
-        assert lots == 0.01
+        # Risk amount = $0.50, lots = 0.50 / (10 * 10) = 0.005 â†’ min 0.01
+        assert lots == 0.0
 
     def test_zero_equity(self):
         lots = position_size(0, 0.005, 5.0, 10.0)
@@ -34,11 +34,11 @@ class TestPositionSize:
 
     def test_zero_sl_distance(self):
         lots = position_size(10000, 0.005, 0, 10.0)
-        assert lots == 0.01  # Should return minimum, not crash
+        assert lots == 0.0  # Invalid stop must block entry
 
     def test_negative_sl_distance(self):
         lots = position_size(10000, 0.005, -5.0, 10.0)
-        assert lots == 0.01  # Safety fallback
+        assert lots == 0.0  # Fail closed
 
     def test_rounding(self):
         lots = position_size(10000, 0.005, 3.33, 10.0)

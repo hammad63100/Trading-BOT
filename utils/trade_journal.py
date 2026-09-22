@@ -205,7 +205,7 @@ def get_last_loss_time() -> Optional[datetime]:
         cursor = conn.execute(
             """
             SELECT close_time FROM trades
-            WHERE status = 'CLOSED' AND profit < 0
+            WHERE status = 'CLOSED' AND profit + commission + swap < 0
             ORDER BY close_time DESC LIMIT 1
             """
         )
@@ -275,5 +275,55 @@ def record_bot_event(event_type: str, details: str = "") -> None:
             (event_type, details)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def original_risk(ticket: int) -> float:
+    """Read the immutable entry/stop distance, even after the live stop moves."""
+    conn = _get_connection()
+    try:
+        row = conn.execute("SELECT open_price, sl FROM trades WHERE ticket = ?", (ticket,)).fetchone()
+        return abs(row["open_price"] - row["sl"]) if row and row["sl"] else 0.0
+    finally:
+        conn.close()
+
+
+def sync_closed_trades() -> bool:
+    """Reconcile journal entries with broker deal history, including SL/TP exits.
+
+    Unknown history blocks new entries; it must never be interpreted as no loss.
+    Partial positions stay OPEN until broker volume has fully closed.
+    """
+    import MetaTrader5 as mt5
+    positions = mt5.positions_get()
+    if positions is None:
+        return False
+    active = {p.ticket for p in positions} | {getattr(p, "identifier", p.ticket) for p in positions}
+    conn = _get_connection()
+    complete = True
+    try:
+        rows = conn.execute("SELECT ticket FROM trades WHERE status = 'OPEN'").fetchall()
+        for row in rows:
+            ticket = row["ticket"]
+            if ticket in active:
+                continue
+            deals = mt5.history_deals_get(position=ticket)
+            if not deals:
+                complete = False
+                continue
+            exits = [d for d in deals if d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY)]
+            if not exits:
+                complete = False
+                continue
+            last = max(exits, key=lambda d: d.time_msc)
+            conn.execute("""UPDATE trades SET status='CLOSED', close_time=?, close_price=?,
+                         profit=?, commission=?, swap=? WHERE ticket=?""",
+                         (datetime.fromtimestamp(last.time_msc / 1000, timezone.utc).isoformat(),
+                          last.price, sum(d.profit for d in deals),
+                          sum(d.commission + getattr(d, "fee", 0.0) for d in deals),
+                          sum(d.swap for d in deals), ticket))
+        conn.commit()
+        return complete
     finally:
         conn.close()

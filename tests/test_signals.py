@@ -34,6 +34,9 @@ def _make_bullish_df():
         "bb_lower":    [2635, 2635, 2635, 2635, 2635],
         "bb_mid":      [2650, 2650, 2650, 2650, 2650],
     })
+    df = pd.concat([df] * 5, ignore_index=True)
+    df["adx"] = 30.0
+    df["macd_hist_slope"] = df["macd_hist"].diff()
     return df
 
 
@@ -52,6 +55,9 @@ def _make_bearish_df():
         "bb_lower":    [2645, 2645, 2645, 2645, 2645],
         "bb_mid":      [2660, 2660, 2660, 2660, 2660],
     })
+    df = pd.concat([df] * 5, ignore_index=True)
+    df["adx"] = 30.0
+    df["macd_hist_slope"] = df["macd_hist"].diff()
     return df
 
 
@@ -70,6 +76,9 @@ def _make_flat_df():
         "bb_lower":    [2640, 2640, 2640, 2640, 2640],
         "bb_mid":      [2650, 2650, 2650, 2650, 2650],
     })
+    df = pd.concat([df] * 5, ignore_index=True)
+    df["adx"] = 30.0
+    df["macd_hist_slope"] = df["macd_hist"].diff()
     return df
 
 
@@ -80,14 +89,14 @@ class TestSignalGeneration:
         signal = generate_signal(df)
         assert signal.direction == "LONG"
         assert signal.confidence >= 0.6
-        assert "bullish" in signal.reason.lower()
+        assert signal.strategy != "none"
 
     def test_short_signal(self):
         df = _make_bearish_df()
         signal = generate_signal(df)
         assert signal.direction == "SHORT"
         assert signal.confidence >= 0.6
-        assert "bearish" in signal.reason.lower()
+        assert signal.strategy != "none"
 
     def test_flat_signal(self):
         df = _make_flat_df()

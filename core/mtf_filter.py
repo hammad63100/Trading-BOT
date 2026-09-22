@@ -49,7 +49,7 @@ def get_htf_trend(symbol: str, timeframe: str) -> dict:
     from config.settings import get_mt5_timeframe
 
     result = {
-        "direction": "NEUTRAL",
+        "direction": "UNAVAILABLE",
         "ema20": 0.0,
         "ema50": 0.0,
         "close": 0.0,
@@ -59,7 +59,8 @@ def get_htf_trend(symbol: str, timeframe: str) -> dict:
 
     try:
         mt5_tf = get_mt5_timeframe(timeframe)
-        rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, 200)
+        from core.data_feed import fetch_ohlcv
+        rates = fetch_ohlcv(symbol, timeframe, 200)
 
         if rates is None or len(rates) < 55:
             log.warning("Not enough %s data for MTF filter (got %d bars)",

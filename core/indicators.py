@@ -86,7 +86,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     hc = (df["high"] - df["close"].shift()).abs()
     lc = (df["low"]  - df["close"].shift()).abs()
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-    df["atr14"] = tr.ewm(alpha=1/14, adjust=False).mean()
+    df["atr14"] = tr.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
 
     # -----------------------------------------------------------------------
     # Bollinger Bands (20, 2)

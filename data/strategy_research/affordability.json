@@ -1,0 +1,7 @@
+{
+  "starting_usd": 50,
+  "risk_budget_usd": 0.15,
+  "assumed_min_lot_stop_cost_min": 2.9110226701055217,
+  "assumed_min_lot_stop_cost_median": 11.657546817665194,
+  "required_equity_at_median_stop_and_0_3pct_risk": 3885.848939221731
+}

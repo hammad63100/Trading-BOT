@@ -12,7 +12,7 @@ v2.0 Upgrades:
 
 Usage:
     python run.py                  # Run in mode specified by .env (default: demo)
-    python run.py --mode demo      # Paper trading on demo account
+    python run.py --mode demo      # Trade on a verified demo account
     python run.py --mode live      # Live trading (requires confirmation)
     python run.py --mode backtest  # Run backtest on historical data
 
@@ -86,6 +86,8 @@ def run_trading_loop():
     send_startup_alert()
     record_bot_event("startup", f"Mode: {TRADING_MODE}, Symbol: {SYMBOL}, TF: {TIMEFRAME}")
 
+    from utils.trade_journal import sync_closed_trades
+    last_entry_bar = None
     cycle_count = 0
     error_count = 0
     MAX_CONSECUTIVE_ERRORS = 10
@@ -100,10 +102,18 @@ def run_trading_loop():
         cycle_count += 1
         try:
             # --- STEP 1: Emergency Loss Checks (CRITICAL FIRST STEP) ---
+            try:
+                history_ok = sync_closed_trades()
+            except Exception:
+                log.exception("Trade reconciliation failed; blocking new entries")
+                history_ok = False
             emergency_result = run_emergency_checks()
-            if emergency_result.get("streak_halt"):
-                log.critical("🛑 Trading halted due to consecutive loss streak — loop pausing")
-                time.sleep(300)  # Pause 5 minutes before checking again
+            manage_open_positions()
+            # Management may have closed a stale position; refresh loss gates before entry.
+            history_ok = sync_closed_trades() and history_ok
+            if not history_ok or emergency_result.get("streak_halt") or emergency_result.get("portfolio_cleared") or emergency_result.get("positions_closed"):
+                log.warning("New entries paused: risk halt or unreconciled trade history")
+                time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
             # --- STEP 2: Fetch & Compute Indicators ---
@@ -132,7 +142,7 @@ def run_trading_loop():
             )
 
             # --- STEP 5: Order Execution ---
-            if signal_result.direction != "FLAT":
+            if signal_result.direction != "FLAT" and last_entry_bar != last["time"]:
                 equity = get_account_equity()
                 log.info(
                     "🚨 Signal: %s | Confidence: %.2f | Reason: %s | Equity: $%.2f | %s",
@@ -140,23 +150,9 @@ def run_trading_loop():
                     signal_result.reason, equity, mtf_str
                 )
 
-                if TRADING_MODE == "live":
-                    place_order(signal_result, df, account_equity=equity)
-                else:
-                    log.info(
-                        "[DEMO MODE] Would place %s order — not executing",
-                        signal_result.direction
-                    )
-                    log_trade_event(
-                        "demo_signal",
-                        direction=signal_result.direction,
-                        confidence=signal_result.confidence,
-                        reason=signal_result.reason
-                    )
-
-            # --- STEP 6: Manage Open Positions (Trail SL, Breakeven, Stale close) ---
-            if TRADING_MODE == "live":
-                manage_open_positions()
+                # Reserve this closed candle before submission; do not retry an uncertain send.
+                last_entry_bar = last["time"]
+                place_order(signal_result, df, account_equity=equity)
 
             # Reset error counter on successful cycle
             error_count = 0
@@ -199,7 +195,7 @@ def run_trading_loop():
     log.info("Bot stopped after %d cycles", cycle_count)
 
 
-def run_backtest_mode():
+def run_backtest_mode(csv_path=None, initial_equity=50.0):
     """Runs the backtesting module on historical data."""
     from config.settings import connect_broker, SYMBOL, TIMEFRAME
     from core.data_feed import fetch_ohlcv
@@ -207,14 +203,15 @@ def run_backtest_mode():
 
     log.info("Starting backtest mode...")
 
-    connect_broker()
-
-    log.info("Fetching historical data for %s/%s...", SYMBOL, TIMEFRAME)
-    df = fetch_ohlcv(SYMBOL, TIMEFRAME, n_bars=5000)
-    log.info("Fetched %d bars | From: %s | To: %s",
-             len(df), df["time"].iloc[0], df["time"].iloc[-1])
-
-    result = run_backtest(df)
+    if csv_path:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        df["time"] = pd.to_datetime(df["time"], utc=True)
+    else:
+        connect_broker()
+        df = fetch_ohlcv(SYMBOL, TIMEFRAME, n_bars=5000)
+    log.info("Signal baseline only: live MTF, trailing and margin rules are not simulated")
+    result = run_backtest(df, initial_equity=initial_equity)
     report = print_backtest_report(result)
 
     report_path = os.path.join("data", "backtest_report.txt")
@@ -238,7 +235,7 @@ def main():
         epilog="""
 Examples:
   python run.py                  # Run in default mode (from .env)
-  python run.py --mode demo      # Paper trading mode
+  python run.py --mode demo      # Verified demo-account trading
   python run.py --mode live      # Live trading (requires confirmation)
   python run.py --mode backtest  # Historical backtesting
         """
@@ -256,6 +253,8 @@ Examples:
         help="Logging level (default: INFO)"
     )
 
+    parser.add_argument("--csv", help="Offline OHLCV CSV for backtest mode")
+    parser.add_argument("--initial-equity", type=float, default=50.0)
     args = parser.parse_args()
 
     setup_logging(log_level=args.log_level)
@@ -267,6 +266,10 @@ Examples:
         importlib.reload(config.settings)
 
     from config.settings import validate_config, TRADING_MODE
+
+    if args.mode == "backtest" and args.csv:
+        run_backtest_mode(args.csv, args.initial_equity)
+        return
 
     try:
         validate_config()
@@ -280,7 +283,7 @@ Examples:
     initialize_journal()
 
     if TRADING_MODE == "backtest" or args.mode == "backtest":
-        run_backtest_mode()
+        run_backtest_mode(initial_equity=args.initial_equity)
         return
 
     if TRADING_MODE == "live" or args.mode == "live":

@@ -16,6 +16,8 @@ Ref: Blueprint Section 6 (v2.0 enhanced)
 
 import time
 import logging
+import math
+from decimal import Decimal, ROUND_FLOOR
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import pandas as pd
@@ -23,11 +25,25 @@ import pandas as pd
 log = logging.getLogger("gold_bot.risk")
 
 
+def floor_volume(lots: float, minimum: float, maximum: float, step: float) -> float:
+    """Round down to the broker grid; never force an unaffordable minimum lot."""
+    if not all(math.isfinite(v) and v > 0 for v in (lots, minimum, maximum, step)):
+        return 0.0
+    if maximum < minimum or lots < minimum:
+        return 0.0
+    units = (Decimal(str(min(lots, maximum))) / Decimal(str(step))).to_integral_value(rounding=ROUND_FLOOR)
+    volume = float(units * Decimal(str(step)))
+    return volume if volume >= minimum else 0.0
+
+
 def position_size(
     account_equity: float,
     risk_pct: float,
     sl_distance_price: float,
-    pip_value_per_lot: float = 10.0
+    pip_value_per_lot: float = 100.0,
+    volume_min: float = 0.01,
+    volume_max: float = 100.0,
+    volume_step: float = 0.01,
 ) -> float:
     """
     Fixed-fractional sizing with Anti-Martingale scaling:
@@ -38,23 +54,20 @@ def position_size(
         account_equity: Current account equity.
         risk_pct: Fraction of equity to risk (e.g., 0.003 for 0.3%).
         sl_distance_price: Distance from entry to stop loss in price units.
-        pip_value_per_lot: Value per pip per standard lot (default 10 for gold).
+        pip_value_per_lot: Account currency per 1.0 price move per lot.
+            Legacy argument name; this is NOT a pip value. Pass broker-derived value.
 
     Returns:
-        Position size in lots, rounded to 2 decimal places.
-        Minimum lot size is 0.01.
+        Lots rounded DOWN to the broker step, or zero if minimum is unaffordable.
     """
     from config.settings import (
         ANTI_MARTINGALE_ENABLED, SIZE_AFTER_1_LOSS, SIZE_AFTER_2_LOSS
     )
     from utils.trade_journal import get_recent_trade_results
 
-    if sl_distance_price <= 0:
-        log.error("SL distance must be positive, got %.4f", sl_distance_price)
-        return 0.01
-
-    if account_equity <= 0:
-        log.error("Account equity is non-positive: %.2f", account_equity)
+    if not all(math.isfinite(v) and v > 0 for v in
+               (account_equity, risk_pct, sl_distance_price, pip_value_per_lot)) or risk_pct > 0.05:
+        log.error("Invalid position sizing inputs")
         return 0.0
 
     # Base lot calculation
@@ -80,8 +93,9 @@ def position_size(
             log.info("📉 Anti-Martingale: %d prior losses → Lot size scaled to %.0f%%",
                      consecutive_losses, multiplier * 100)
 
-    lots = round(lots * multiplier, 2)
-    lots = max(lots, 0.01)
+    if not math.isfinite(multiplier) or not 0 < multiplier <= 1:
+        return 0.0
+    lots = floor_volume(lots * multiplier, volume_min, volume_max, volume_step)
 
     log.debug(
         "Position size: Equity=%.2f, Risk%%=%.3f, Risk$=%.2f, SL dist=%.4f, Multiplier=%.2f, Lots=%.2f",
@@ -100,9 +114,9 @@ def daily_loss_breaker_triggered(account_equity: float) -> bool:
     from config.settings import MAX_DAILY_LOSS_PCT
     from utils.trade_journal import get_realized_pnl_since
 
-    if account_equity <= 0:
+    if not math.isfinite(account_equity) or account_equity <= 0:
         log.warning("Daily loss check skipped — equity returned %.2f", account_equity)
-        return False
+        return True
 
     today_start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -160,7 +174,7 @@ def open_position_count(symbol: Optional[str] = None) -> int:
 
     positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
     if positions is None:
-        return 0
+        raise RuntimeError("Position query failed; new entries blocked")
 
     bot_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
     return len(bot_positions)
@@ -172,6 +186,8 @@ def same_direction_position_count(symbol: str, direction: str) -> int:
     from config.settings import MAGIC_NUMBER
 
     positions = mt5.positions_get(symbol=symbol)
+    if positions is None:
+        raise RuntimeError("Position query failed; new entries blocked")
     if not positions:
         return 0
 
@@ -193,6 +209,8 @@ def recent_entry_spacing_check(signal_direction: str, current_price: float, atr:
     )
 
     positions = mt5.positions_get(symbol=SYMBOL)
+    if positions is None:
+        raise RuntimeError("Position query failed; new entries blocked")
     if not positions:
         return False, ""
 
@@ -232,7 +250,7 @@ def check_spread_filter(symbol: str) -> tuple[bool, str]:
 
     info = mt5.symbol_info(symbol)
     if not info:
-        return False, ""
+        return True, "Symbol information unavailable"
 
     current_spread = info.spread  # in points
     # Typical gold spread is ~15-20 points ($0.15-$0.20)

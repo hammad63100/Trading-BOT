@@ -42,3 +42,7 @@ Thumbs.db
 
 # Gemini
 .gemini/
+
+# SQLite journal sidecars
+*.db-shm
+*.db-wal

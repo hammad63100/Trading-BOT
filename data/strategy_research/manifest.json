@@ -1,0 +1,12 @@
+{
+  "python": "3.11.9",
+  "sha256": {
+    "core/signals.py": "b07204ed5a97a691b44928b163e098bb23985fca06ec51f187517dec352e49eb",
+    "core/indicators.py": "34aa754fc088a844d7a05b1395bbbd6d5e639b3e3bea40cf83c184a90798f95e",
+    "core/affordability.py": "92344aab91a2d355c1b3c0550e279f202d89419a4ab25e19d3121bce080ecb50",
+    "research/candidates.py": "1a6d46c93a2a6058f30da7da2a909d26724954cd9ad739733b2d3b692c0baa2d",
+    "research/robust_simulator.py": "d916f3f2e4b534ac88e771aa05e591c8811ffbc50e00cf0771cb9433f04a4986",
+    "research/evaluate_candidates.py": "f97b1c400f85e1c4d092fd7aa8a83e9c577d41402ea951ea663b122817e1cc64",
+    "data/historical_test/gold_m15.csv": "785a0fe1c968dc82193f8cb79823a243e024246318958895aa5e6df5d69480fb"
+  }
+}

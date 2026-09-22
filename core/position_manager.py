@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from utils.logger import log_trade_event
+from utils.trade_journal import original_risk
 
 log = logging.getLogger("gold_bot.position_mgr")
 
@@ -99,7 +100,9 @@ def _check_stale_position(pos, tick) -> bool:
     max_age_seconds = MAX_POSITION_AGE_HOURS * 3600
 
     if age_seconds > max_age_seconds:
-        risk_unit = abs(pos.price_open - pos.sl) if pos.sl > 0 else 1.0
+        risk_unit = original_risk(pos.ticket)
+        if risk_unit <= 0:
+            return False
         is_buy = pos.type == 0  # ORDER_TYPE_BUY
         current_price = tick.bid if is_buy else tick.ask
         fav_move = (current_price - pos.price_open) if is_buy else (pos.price_open - current_price)
@@ -132,7 +135,7 @@ def _smart_trail(pos, atr: float, tick) -> None:
     is_buy = pos.type == mt5.ORDER_TYPE_BUY
     current_price = tick.bid if is_buy else tick.ask
 
-    risk_unit = abs(pos.price_open - pos.sl)
+    risk_unit = original_risk(pos.ticket)
     if risk_unit <= 0:
         log.debug("Position %d has no SL set — skipping", pos.ticket)
         return

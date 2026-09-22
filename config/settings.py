@@ -48,8 +48,8 @@ BYPASS_STALENESS_CHECK: bool = os.getenv("BYPASS_STALENESS_CHECK", "False").lowe
 # ---------------------------------------------------------------------------
 MAX_RISK_PER_TRADE: float = float(os.getenv("MAX_RISK_PER_TRADE", "0.003"))        # 0.3% of equity (was 0.5%)
 MAX_DAILY_LOSS_PCT: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "0.02"))         # 2% daily loss halt
-MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "3"))                 # reduced from 5 to 3
-MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "15"))                # reduced from 30 to 15
+MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "1"))                 # reduced from 5 to 3
+MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "5"))                # reduced from 30 to 15
 COOLDOWN_AFTER_LOSS_MIN: int = int(os.getenv("COOLDOWN_AFTER_LOSS_MIN", "15"))       # 15 min pause after loss (was 5)
 ATR_SL_MULTIPLIER: float = float(os.getenv("ATR_SL_MULTIPLIER", "1.5"))              # wider SL for gold (was 1.0)
 ATR_TP_MULTIPLIER: float = float(os.getenv("ATR_TP_MULTIPLIER", "3.0"))              # better R:R (was 2.0)
@@ -72,7 +72,7 @@ LOSING_STREAK_COOLDOWN_MIN: int = int(os.getenv("LOSING_STREAK_COOLDOWN_MIN", "3
 # ---------------------------------------------------------------------------
 # ANTI-STACKING — prevent order pileups like yesterday
 # ---------------------------------------------------------------------------
-MAX_SAME_DIRECTION_POS: int = int(os.getenv("MAX_SAME_DIRECTION_POS", "2"))             # max 2 same direction (was 5)
+MAX_SAME_DIRECTION_POS: int = int(os.getenv("MAX_SAME_DIRECTION_POS", "1"))             # max 2 same direction (was 5)
 MIN_ENTRY_SPACING_SEC: int = int(os.getenv("MIN_ENTRY_SPACING_SEC", "300"))              # 5 min between entries (was 90s)
 MIN_ENTRY_SPACING_ATR: float = float(os.getenv("MIN_ENTRY_SPACING_ATR", "1.0"))          # 1 ATR distance (was 0.3)
 
@@ -153,7 +153,7 @@ def validate_config() -> bool:
     if not BROKER_SERVER:
         errors.append("BROKER_SERVER is not set")
 
-    if TRADING_MODE not in ("demo", "live"):
+    if TRADING_MODE not in ("demo", "live", "backtest"):
         errors.append(f"TRADING_MODE must be 'demo' or 'live', got '{TRADING_MODE}'")
 
     if MAX_RISK_PER_TRADE <= 0 or MAX_RISK_PER_TRADE > 0.05:
@@ -209,11 +209,15 @@ def connect_broker() -> bool:
         raise ConnectionError(f"Failed to select symbol {SYMBOL} in Market Watch")
 
     account = mt5.account_info()
+    if account is None:
+        mt5.shutdown()
+        raise ConnectionError("Account information unavailable")
     log.info(f"Connected to {BROKER_SERVER} | Account: {account.login} | "
              f"Balance: {account.balance:.2f} | Equity: {account.equity:.2f}")
 
     if TRADING_MODE == "demo" and account.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
-        log.warning("TRADING_MODE is 'demo' but connected account is not a demo account!")
+        mt5.shutdown()
+        raise ConnectionError("Demo mode requires a demo account")
 
     return True
 

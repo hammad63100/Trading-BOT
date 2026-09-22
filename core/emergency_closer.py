@@ -96,14 +96,7 @@ def force_close_position(position) -> bool:
             entry_price=position.price_open,
             close_price=close_price,
         )
-        # Record in trade journal
-        record_trade_close(
-            ticket=position.ticket,
-            close_price=close_price,
-            profit=position.profit,
-            commission=getattr(position, 'commission', 0.0),
-            swap=getattr(position, 'swap', 0.0),
-        )
+        # Broker fills are reconciled on the next cycle; quoted PnL is not a fill.
         return True
     else:
         retcode = result.retcode if result else "None"
@@ -120,15 +113,16 @@ def check_per_position_loss(positions: list, equity: float) -> list:
     Check each position's loss against MAX_LOSS_PER_POSITION.
     Returns list of positions that need emergency closing.
     """
-    from config.settings import MAX_LOSS_PER_POSITION
+    from config.settings import MAX_LOSS_PER_POSITION, MAX_RISK_PER_TRADE
+    limit = min(abs(MAX_LOSS_PER_POSITION), max(0, equity) * MAX_RISK_PER_TRADE)
 
     to_close = []
     for pos in positions:
         # pos.profit includes unrealized PnL
-        if pos.profit < -abs(MAX_LOSS_PER_POSITION):
+        if pos.profit < -limit:
             log.warning(
                 "🔴 Position %d exceeds max loss: $%.2f (limit: -$%.2f)",
-                pos.ticket, pos.profit, MAX_LOSS_PER_POSITION
+                pos.ticket, pos.profit, limit
             )
             to_close.append(pos)
 
@@ -187,6 +181,11 @@ def check_consecutive_losses() -> tuple[bool, int]:
         else:
             break  # streak broken
 
+    from utils.trade_journal import get_last_loss_time
+    last_loss = get_last_loss_time()
+    now = datetime.now(timezone.utc)
+    if last_loss is None or last_loss.date() < now.date():
+        return False, consecutive_losses
     if consecutive_losses >= CONSECUTIVE_LOSS_HALT:
         log.critical(
             "🚨 LOSING STREAK HALT | %d consecutive losses — STOPPING TRADING FOR THE DAY",
@@ -199,7 +198,7 @@ def check_consecutive_losses() -> tuple[bool, int]:
             "⚠️ LOSING STREAK WARNING | %d consecutive losses — %d min cooldown active",
             consecutive_losses, LOSING_STREAK_COOLDOWN_MIN
         )
-        # The cooldown is enforced via the overtrading_guard in risk_manager
+        return (now - last_loss).total_seconds() < LOSING_STREAK_COOLDOWN_MIN * 60, consecutive_losses
 
     return False, consecutive_losses
 
@@ -259,6 +258,7 @@ def run_emergency_checks() -> dict:
         # Get account equity
         account = mt5.account_info()
         if account is None:
+            result["streak_halt"] = True
             log.error("Cannot get account info for emergency checks")
             return result
 
@@ -266,6 +266,9 @@ def run_emergency_checks() -> dict:
 
         # Get all bot positions
         positions = mt5.positions_get(symbol=SYMBOL)
+        if positions is None:
+            result["streak_halt"] = True
+            return result
         bot_positions = []
         if positions:
             bot_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
@@ -315,6 +318,7 @@ def run_emergency_checks() -> dict:
         result["streak_halt"] = halt
 
     except Exception as e:
+        result["streak_halt"] = True
         log.error("Emergency check error: %s", e, exc_info=True)
 
     return result

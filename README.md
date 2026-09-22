@@ -1,3 +1,5 @@
+> **September 2026 safety revision:** Read [SAFETY_REVIEW.md](SAFETY_REVIEW.md) first. Demo mode now submits orders only to verified demo accounts. Below-minimum risk sizing skips trades. Older feature descriptions and example limits below are historical; the review and current configuration describe the updated behavior. Profitability has not been established.
+
 # 🥇 XAU/USD Algorithmic Gold Trading Bot v2.0
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)

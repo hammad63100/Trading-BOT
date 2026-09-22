@@ -1,0 +1,19 @@
+{
+  "symbol": "XAUUSDm",
+  "timeframe": "M15",
+  "source": "Configured MT5 demo broker",
+  "exported_utc": "2026-09-19T10:41:22.544315+00:00",
+  "bars": 30000,
+  "first": "2025-04-23 04:45:00+00:00",
+  "last": "2026-09-18 20:30:00+00:00",
+  "account_currency": "USD",
+  "leverage": 500,
+  "volume_min": 0.01,
+  "volume_step": 0.01,
+  "volume_max": 200.0,
+  "contract_size": 100.0,
+  "point": 0.001,
+  "value_per_price_per_lot": 100.0,
+  "spread_price_median": 0.16,
+  "spread_price_p90": 0.28
+}
