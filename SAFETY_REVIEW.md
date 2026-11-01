@@ -40,3 +40,12 @@ The simulator is a signal baseline, not full live parity: it omits higher-timefr
 MT5 reference: https://www.mql5.com/en/docs/python_metatrader5/mt5ordercalcprofit_py
 
 
+Action	Command
+Run Pre-Flight Diagnostic	python scripts/health_check.py
+Run Bot with Live Web Dashboard	python run.py --mode demo --dashboard
+Run Standalone Web Dashboard	python dashboard/app.py
+Run as Continuous Service (Auto-Restart)	python scripts/service_runner.py
+View Quant Performance Report	python scripts/performance_report.py --days 30 --save
+Retrain Machine Learning Model	python scripts/train_model.py --bars 5000
+Run Backtest Simulation	python run.py --mode backtest
+Run Full Test Suite (70 Tests)	pytest -v
