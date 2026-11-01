@@ -9,12 +9,14 @@ v2.0 Upgrades:
 - Multi-Timeframe (MTF) status monitoring
 - Floating PnL reporting per cycle
 - Losing streak automatic halt protection
+- Real-time Web Dashboard integration (flag: --dashboard)
 
 Usage:
-    python run.py                  # Run in mode specified by .env (default: demo)
-    python run.py --mode demo      # Trade on a verified demo account
-    python run.py --mode live      # Live trading (requires confirmation)
-    python run.py --mode backtest  # Run backtest on historical data
+    python run.py                     # Run in mode specified by .env (default: demo)
+    python run.py --dashboard         # Run with web dashboard at http://localhost:5555
+    python run.py --mode demo         # Trade on a verified demo account
+    python run.py --mode live         # Live trading (requires confirmation)
+    python run.py --mode backtest     # Run backtest on historical data
 
 Ref: Blueprint Section 9 (v2.0)
 """
@@ -47,7 +49,7 @@ def signal_handler(signum, frame):
     _shutdown_requested = True
 
 
-def run_trading_loop():
+def run_trading_loop(enable_dashboard: bool = False):
     """
     Main trading loop (v2.0):
     1. Run emergency checks (force close bad losers / portfolio drawdown)
@@ -69,6 +71,16 @@ def run_trading_loop():
     from core.emergency_closer import run_emergency_checks
     from core.mtf_filter import get_mtf_summary
     from ml.model import load_model_if_available
+
+    # Start dashboard if requested
+    if enable_dashboard:
+        try:
+            from dashboard.app import start_dashboard, update_bot_status
+            start_dashboard(host="0.0.0.0", port=5555)
+            update_bot_status(running=True, mode=TRADING_MODE, symbol=SYMBOL)
+            log.info("Live Monitoring Dashboard running at http://localhost:5555")
+        except Exception as e:
+            log.warning("Could not launch web dashboard: %s", e)
 
     # Connect to broker
     log.info("Connecting to broker...")
@@ -96,6 +108,8 @@ def run_trading_loop():
     log.info("  Gold Trading Bot v2.0 — RUNNING")
     log.info("  Mode: %s | Symbol: %s | Timeframe: %s", TRADING_MODE.upper(), SYMBOL, TIMEFRAME)
     log.info("  Poll interval: %ds", POLL_INTERVAL_SECONDS)
+    if enable_dashboard:
+        log.info("  Web Dashboard: http://localhost:5555")
     log.info("═" * 60)
 
     while not _shutdown_requested:
@@ -141,6 +155,19 @@ def run_trading_loop():
                 getattr(signal_result, "strategy", "none")
             )
 
+            # Update dashboard status if running
+            if enable_dashboard:
+                try:
+                    from dashboard.app import update_bot_status
+                    update_bot_status(
+                        running=True,
+                        mode=TRADING_MODE,
+                        symbol=SYMBOL,
+                        last_cycle=datetime.now(timezone.utc).isoformat()
+                    )
+                except Exception:
+                    pass
+
             # --- STEP 5: Order Execution ---
             if signal_result.direction != "FLAT" and last_entry_bar != last["time"]:
                 equity = get_account_equity()
@@ -184,6 +211,13 @@ def run_trading_loop():
 
     # --- Shutdown ---
     log.info("Shutting down...")
+    if enable_dashboard:
+        try:
+            from dashboard.app import update_bot_status
+            update_bot_status(running=False)
+        except Exception:
+            pass
+
     try:
         import MetaTrader5 as mt5
         mt5.shutdown()
@@ -235,6 +269,7 @@ def main():
         epilog="""
 Examples:
   python run.py                  # Run in default mode (from .env)
+  python run.py --dashboard      # Run with live monitoring dashboard
   python run.py --mode demo      # Verified demo-account trading
   python run.py --mode live      # Live trading (requires confirmation)
   python run.py --mode backtest  # Historical backtesting
@@ -245,6 +280,11 @@ Examples:
         choices=["demo", "live", "backtest"],
         default=None,
         help="Trading mode (overrides TRADING_MODE in .env)"
+    )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Launch the live web dashboard on http://localhost:5555"
     )
     parser.add_argument(
         "--log-level",
@@ -296,7 +336,7 @@ Examples:
             log.info("Live trading cancelled by user")
             sys.exit(0)
 
-    run_trading_loop()
+    run_trading_loop(enable_dashboard=args.dashboard)
 
 
 if __name__ == "__main__":

@@ -38,3 +38,5 @@ CSV columns: time (UTC), open, high, low, close, tick_volume; prices are BID OHL
 The simulator is a signal baseline, not full live parity: it omits higher-timeframe alignment, trailing, margin, daily-loss and some emergency rules. Bar-close drawdown can miss intrabar excursions. It must not be used as proof that the live bot is profitable. Validate unchanged parameters on a separate chronological sample and then on the verified demo account before considering live use.
 
 MT5 reference: https://www.mql5.com/en/docs/python_metatrader5/mt5ordercalcprofit_py
+
+
